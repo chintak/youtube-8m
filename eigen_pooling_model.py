@@ -33,6 +33,11 @@ def _float_feature(value_list):
 def _bytes_feature(value):
     return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
 
+def mapped(fn, arrs):
+    ii = tf.range(0, tf.shape(arrs[0])[0])
+    out = tf.map_fn(lambda i: fn(*[arr[i] for arr in arrs]), ii, dtype=tf.float32)
+    return out
+
 def parse_frame_level_features():
     # Frame level features
     # feature_names, feature_sizes = "rgb", "1024"
@@ -56,8 +61,36 @@ def main():
     logging.set_verbosity(tf.logging.INFO)
     feat_dim = 1024
     sample_nframes = 100
-    sample_idx = np.arange(sample_nframes)
+
+    # Eigen pooling
     training_data = parse_frame_level_features()
+    video_ids, video_matrix, labels, num_frames = map(list, zip(*training_data))
+    batch_size = len(video_ids)
+    video_matrix = tf.squeeze(tf.convert_to_tensor(video_matrix))
+    num_frames = tf.convert_to_tensor(num_frames)
+    sample_idxs = tf.constant(np.tile(np.arange(sample_nframes), (batch_size,1)),
+                              dtype=tf.float32)
+
+    sample_freq = tf.cast(num_frames / sample_nframes, tf.float32)
+    # indexing
+    b = tf.reshape(tf.range(0, batch_size), (batch_size, 1))
+    b = tf.tile(b, (1, sample_nframes))
+    pick = tf.cast(tf.floor(sample_idxs * sample_freq), dtype=tf.int32)
+    indices = tf.stack([b, pick], axis=2)
+    print pick.get_shape(), video_matrix.get_shape(), indices.get_shape()
+
+    sampled_vid_feats = tf.gather_nd(video_matrix, indices)
+    perm_sampled_vid_feats = tf.transpose(sampled_vid_feats, perm=[0, 2, 1])
+    vid_covar = mapped(lambda a,b: tf.matmul(a, b),
+                       [sampled_vid_feats, perm_sampled_vid_feats])
+    vid_covar = tf.reshape(vid_covar, (batch_size, sample_nframes, sample_nframes))
+    print vid_covar.get_shape(), sampled_vid_feats.get_shape()
+    red_vid_covar = tf.reduce_sum(vid_covar, axis=0)
+    pooled_covar = tf.Variable(np.zeros((sample_nframes, sample_nframes)),
+                               dtype=tf.float32, trainable=False)
+    accumulator = pooled_covar.assign(pooled_covar + red_vid_covar)
+
+    # Create tensorflow Session
     sess = tf.Session()
 
     init_op = tf.global_variables_initializer()
@@ -71,31 +104,19 @@ def main():
         min_nframes = 1e3
         nvids = 0
         skipped = 0
-        acc_covar = np.zeros((sample_nframes, sample_nframes), dtype=np.float32)
         while not coord.should_stop():
             # Run training steps or whatever
-            if nvids >= 1000:
-                break
-            examples = sess.run(training_data)
-            for v_id, v_feat, v_labels, nframes in examples:
-                nframes = nframes[0]
-                sample_freq = nframes // sample_nframes
-                v_feat = np.squeeze(v_feat)
-                idx = np.floor(sample_idx * sample_freq).astype(np.uint16)
-                samp_feat = v_feat[idx, :]
-                if samp_feat.shape[0] < sample_nframes:
-                    skipped = skipped + 1
-                    continue
-                acc_covar = acc_covar + np.matmul(samp_feat, samp_feat.T)
-                nvids = nvids + 1
-                min_nframes = min(min_nframes, nframes)
-                if nvids % 10 == 0:
-                    logging.info("Processed %d" % nvids)
+            # if nvids >= 1000:
+                # break
+            acc_covars = sess.run(accumulator)
+            nvids = nvids + acc_covars.shape[0]
+            if nvids % 10 == 0:
+                logging.info("Processed %d" % nvids)
         # calculate mean covariance matrix
-        acc_covar /= nvids
+        acc_covars /= nvids
         logging.info("Skipped: " + str(skipped))
         logging.info("Calculating the Eigendecomposition of the Covariance matrix")
-        [lambdas, vr] = eig(acc_covar)
+        [lambdas, vr] = eig(acc_covars)
         logging.info("Writing covariance matrix, eigen values and eigen vectors to %s" % (
             FLAGS.output_file_name))
         writer = tf.python_io.TFRecordWriter(FLAGS.output_file_name)
