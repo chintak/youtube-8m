@@ -46,7 +46,7 @@ def parse_frame_level_features():
         FLAGS.feature_names, FLAGS.feature_sizes)
 
     filename_queue = tf.train.string_input_producer(
-        tf.train.match_filenames_once(FLAGS.input_file_pattern))
+        tf.train.match_filenames_once(FLAGS.input_file_pattern), num_epochs=1)
     reader = readers.YT8MFrameFeatureReader(
         feature_names=feature_names, feature_sizes=feature_sizes)
 
@@ -94,9 +94,9 @@ def main():
     # Create tensorflow Session
     sess = tf.Session()
 
-    init_op = tf.global_variables_initializer()
     # Initialize the variables (like the epoch counter).
-    sess.run(init_op)
+    tf.global_variables_initializer().run(session=sess)
+    tf.local_variables_initializer().run(session=sess)
 
     # Start input enqueue threads.
     coord = tf.train.Coordinator()
