@@ -134,14 +134,14 @@ def main():
         writer.write(example.SerializeToString())
 
     except tf.errors.OutOfRangeError:
-        logging.error('Done iterating -- epoch limit reached')
+        logging.info('Done iterating -- epoch limit reached')
 
     # When done, ask the threads to stop.
     coord.request_stop()
     # Wait for threads to finish.
     coord.join(threads)
     sess.close()
-    logging.info("Complete.")
+    logging.info("Completed %d examples." % nvids)
 
 if __name__ == '__main__':
     main()
