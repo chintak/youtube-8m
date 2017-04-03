@@ -78,14 +78,12 @@ def main():
     b = tf.tile(b, (1, sample_nframes))
     pick = tf.cast(tf.floor(sample_idxs * sample_freq), dtype=tf.int32)
     indices = tf.stack([b, pick], axis=2)
-    print pick.get_shape(), video_matrix.get_shape(), indices.get_shape()
 
     sampled_vid_feats = tf.gather_nd(video_matrix, indices)
     perm_sampled_vid_feats = tf.transpose(sampled_vid_feats, perm=[0, 2, 1])
     vid_covar = mapped(lambda a,b: tf.matmul(a, b),
                        [sampled_vid_feats, perm_sampled_vid_feats])
     vid_covar = tf.reshape(vid_covar, (batch_size, sample_nframes, sample_nframes))
-    print vid_covar.get_shape(), sampled_vid_feats.get_shape()
     red_vid_covar = tf.reduce_sum(vid_covar, axis=0)
     pooled_covar = tf.Variable(np.zeros((sample_nframes, sample_nframes)),
                                dtype=tf.float32, trainable=False)
@@ -112,7 +110,7 @@ def main():
             # if nvids >= 1000:
                 # break
             acc_covars = sess.run(accumulator)
-            nvids = nvids + acc_covars.shape[0]
+            nvids = nvids + batch_size
             end = time.time() - start
             if printed + 10000 < nvids:
                 printed = nvids
