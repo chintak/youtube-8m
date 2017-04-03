@@ -1,4 +1,5 @@
 from __future__ import division
+import time
 import numpy as np
 import tensorflow as tf
 from tensorflow import flags
@@ -104,14 +105,19 @@ def main():
         min_nframes = 1e3
         nvids = 0
         skipped = 0
+        printed = 0
+        start = time.time()
         while not coord.should_stop():
             # Run training steps or whatever
             # if nvids >= 1000:
                 # break
             acc_covars = sess.run(accumulator)
             nvids = nvids + acc_covars.shape[0]
-            if nvids % 10 == 0:
-                logging.info("Processed %d" % nvids)
+            end = time.time() - start
+            if printed + 10000 < nvids:
+                printed = nvids
+                logging.info("Processed %d in %.3f sec @ %.3f ms" % (
+                    nvids, end, (end*1000)/nvids))
         # calculate mean covariance matrix
         acc_covars /= nvids
         logging.info("Skipped: " + str(skipped))
