@@ -116,23 +116,24 @@ def main():
                 printed = nvids
                 logging.info("Processed %d in %.3f sec @ %.3f ms" % (
                     nvids, end, (end*1000)/nvids))
-        # calculate mean covariance matrix
-        acc_covars /= nvids
-        logging.info("Skipped: " + str(skipped))
-        logging.info("Calculating the Eigendecomposition of the Covariance matrix")
-        [lambdas, vr] = eig(acc_covars)
-        logging.info("Writing covariance matrix, eigen values and eigen vectors to %s" % (
-            FLAGS.output_file_name))
-        writer = tf.python_io.TFRecordWriter(FLAGS.output_file_name)
-        example = tf.train.Example(features=tf.train.Features(feature={
-            'time_steps': _int64_feature(sample_nframes),
-            'eigen_vectors': _float_feature(vr),
-            'eigen_values': _float_feature(np.real(lambdas))
-        }))
-        writer.write(example.SerializeToString())
 
     except tf.errors.OutOfRangeError:
         logging.info('Done iterating -- epoch limit reached')
+
+    # calculate mean covariance matrix
+    acc_covars /= nvids
+    logging.info("Skipped: " + str(skipped))
+    logging.info("Calculating the Eigendecomposition of the Covariance matrix")
+    [lambdas, vr] = eig(acc_covars)
+    logging.info("Writing covariance matrix, eigen values and eigen vectors to %s" % (
+        FLAGS.output_file_name))
+    writer = tf.python_io.TFRecordWriter(FLAGS.output_file_name)
+    example = tf.train.Example(features=tf.train.Features(feature={
+        'time_steps': _int64_feature(sample_nframes),
+        'eigen_vectors': _float_feature(vr),
+        'eigen_values': _float_feature(np.real(lambdas))
+    }))
+    writer.write(example.SerializeToString())
 
     # When done, ask the threads to stop.
     coord.request_stop()
