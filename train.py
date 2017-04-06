@@ -47,6 +47,13 @@ if __name__ == "__main__":
   flags.DEFINE_string("feature_names", "mean_rgb", "Name of the feature "
                       "to use for training.")
   flags.DEFINE_string("feature_sizes", "1024", "Length of the feature vectors.")
+  # related to eigen pooling
+  flags.DEFINE_bool("use_eigen_pooling", False, "Perform eigen pooling.")
+  flags.DEFINE_integer("eigen_k_vecs", 10, "Number of eigen vectors to use for pooling.")
+  flags.DEFINE_integer("eigen_pool_time_steps", 100,
+                       "Time steps to consider for eigen pooling.")
+  flags.DEFINE_string("eigen_vec_file_name", "",
+                      "Path to tfrecord file containing eigen vectors.")
 
   # Model flags.
   flags.DEFINE_bool(
@@ -404,8 +411,8 @@ class Trainer(object):
         is_chief=self.is_master,
         global_step=global_step,
         save_model_secs=15 * 60 if not FLAGS.debug else 0,
-        save_summaries_secs=120,
-        saver=saver if not FLAGS.debug else None)
+        save_summaries_secs=120 if not FLAGS.debug else 0,
+        saver=saver)
 
     logging.info("%s: Starting managed session.", task_as_string(self.task))
     with sv.managed_session(target, config=self.config) as sess:
@@ -569,8 +576,16 @@ def get_reader():
       FLAGS.feature_names, FLAGS.feature_sizes)
 
   if FLAGS.frame_features:
-    reader = readers.YT8MFrameFeatureReader(
+    if FLAGS.use_eigen_pooling:
+      assert FLAGS.eigen_vec_file_name is not None, "Enter path to eigenvectors."
+      reader = readers.YT8MFrameEigPoolFeatureReader(
+        FLAGS.eigen_vec_file_name,
+        FLAGS.eigen_pool_time_steps,
+        top_k_eigen_feats=FLAGS.eigen_k_vecs,
         feature_names=feature_names, feature_sizes=feature_sizes)
+    else:
+      reader = readers.YT8MFrameFeatureReader(
+          feature_names=feature_names, feature_sizes=feature_sizes)
   else:
     reader = readers.YT8MAggregatedFeatureReader(
         feature_names=feature_names, feature_sizes=feature_sizes)
@@ -668,4 +683,11 @@ def main(unused_argv):
                      (task_as_string(task), task.type))
 
 if __name__ == "__main__":
-  app.run()
+  try:
+    app.run()
+  except KeyboardInterrupt:
+    logging.info("Interrupted.")
+  except tf.errors.ResourceExhaustedError:
+    logging.error("Ran out of memory. Exiting.")
+  except Exception as e:
+    logging.error("Exception occured.")
