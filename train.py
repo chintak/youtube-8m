@@ -101,6 +101,8 @@ if __name__ == "__main__":
       "Whether to write the device on which every op will run into the "
       "logs on startup.")
 
+  flags.DEFINE_bool("debug", False, "Debug mode.")
+
 def validate_class_name(flag_value, category, modules, expected_superclass):
   """Checks that the given string matches a class of the expected type.
 
@@ -401,9 +403,9 @@ class Trainer(object):
         init_op=init_op,
         is_chief=self.is_master,
         global_step=global_step,
-        save_model_secs=15 * 60,
+        save_model_secs=15 * 60 if not FLAGS.debug else 0,
         save_summaries_secs=120,
-        saver=saver)
+        saver=saver if not FLAGS.debug else None)
 
     logging.info("%s: Starting managed session.", task_as_string(self.task))
     with sv.managed_session(target, config=self.config) as sess:
@@ -456,6 +458,9 @@ class Trainer(object):
           else:
             logging.info("training step " + str(global_step_val) + " | Loss: " +
               ("%.2f" % loss_val) + " Examples/sec: " + ("%.2f" % examples_per_second))
+      except KeyboardInterrupt:
+        logging.info("%s: Training interrupted.",
+                     task_as_string(self.task))
       except tf.errors.OutOfRangeError:
         logging.info("%s: Done training -- epoch limit reached.",
                      task_as_string(self.task))

@@ -109,7 +109,6 @@ def transform_eig_pool():
     eigenvecs_np = np.reshape(eigenvecs_np.T, (1, eigenvecs_np.shape[0], eigenvecs_np.shape[1]))
     eigenvecs = tf.constant(eigenvecs_np, dtype=tf.float32)
     eigenvecs = tf.tile(eigenvecs, (batch_size, 1, 1))
-    print eigenvecs.get_shape()
     # Eigen pooling
     training_data = parse_frame_level_features()
     video_ids, video_matrix, labels, num_frames = map(list, zip(*training_data))
@@ -127,6 +126,7 @@ def transform_eig_pool():
 
     sampled_vid_feats = tf.gather_nd(video_matrix, indices)
     transformed_feats = tf.matmul(eigenvecs, sampled_vid_feats)
+    transformed_feats = tf.slice(transformed_feats, [0, 0, 0], [-1, 5, -1])
 
     # Setup TFRecord writer
     MAX_EXAMPLES = 4904528
