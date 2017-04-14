@@ -49,7 +49,8 @@ if __name__ == "__main__":
   flags.DEFINE_string("feature_sizes", "1024", "Length of the feature vectors.")
   # related to eigen pooling
   flags.DEFINE_bool("use_eigen_pooling", False, "Perform eigen pooling.")
-  flags.DEFINE_integer("eigen_k_vecs", 10, "Number of eigen vectors to use for pooling.")
+  flags.DEFINE_integer("eigen_k_vecs", 10,
+                       "Number of eigen vectors to use for pooling.")
   flags.DEFINE_integer("eigen_pool_time_steps", 100,
                        "Time steps to consider for eigen pooling.")
   flags.DEFINE_string("eigen_vec_file_name", "",
@@ -93,12 +94,12 @@ if __name__ == "__main__":
                        "halting training.")
   flags.DEFINE_integer("max_steps", None,
                        "The maximum number of iterations of the training loop.")
-  flags.DEFINE_integer("export_model_steps", 1000,
+  flags.DEFINE_integer("export_model_steps", 100000,
                        "The period, in number of steps, with which the model "
                        "is exported for batch prediction.")
 
   # Other flags.
-  flags.DEFINE_integer("num_readers", 8,
+  flags.DEFINE_integer("num_readers", 4,
                        "How many threads to use for reading input files.")
   flags.DEFINE_string("optimizer", "AdamOptimizer",
                       "What optimizer class to use.")
@@ -108,6 +109,7 @@ if __name__ == "__main__":
       "Whether to write the device on which every op will run into the "
       "logs on startup.")
 
+  flags.DEFINE_bool("summary", False, "Write Tensorboard summaries.")
   flags.DEFINE_bool("debug", False, "Debug mode.")
 
 def validate_class_name(flag_value, category, modules, expected_superclass):
@@ -246,7 +248,7 @@ def build_graph(reader,
       learning_rate_decay_examples,
       learning_rate_decay,
       staircase=True)
-  tf.summary.scalar('learning_rate', learning_rate)
+  if FLAGS.summary: tf.summary.scalar('learning_rate', learning_rate)
 
   optimizer = optimizer_class(learning_rate)
   unused_video_id, model_input_raw, labels_batch, num_frames = (
@@ -256,7 +258,7 @@ def build_graph(reader,
           batch_size=batch_size * num_towers,
           num_readers=num_readers,
           num_epochs=num_epochs))
-  tf.summary.histogram("model/input_raw", model_input_raw)
+  if FLAGS.summary: tf.summary.histogram("model/input_raw", model_input_raw)
 
   feature_dim = len(model_input_raw.get_shape()) - 1
 
@@ -280,8 +282,9 @@ def build_graph(reader,
             num_frames=tower_num_frames[i],
             vocab_size=reader.num_classes,
             labels=tower_labels[i])
-          for variable in slim.get_model_variables():
-            tf.summary.histogram(variable.op.name, variable)
+          if FLAGS.summary:
+            for variable in slim.get_model_variables():
+              tf.summary.histogram(variable.op.name, variable)
 
           predictions = result["predictions"]
           tower_predictions.append(predictions)
@@ -321,10 +324,10 @@ def build_graph(reader,
               colocate_gradients_with_ops=False)
           tower_gradients.append(gradients)
   label_loss = tf.reduce_mean(tf.stack(tower_label_losses))
-  tf.summary.scalar("label_loss", label_loss)
+  if FLAGS.summary: tf.summary.scalar("label_loss", label_loss)
   if regularization_penalty != 0:
     reg_loss = tf.reduce_mean(tf.stack(tower_reg_losses))
-    tf.summary.scalar("reg_loss", reg_loss)
+    if FLAGS.summary: tf.summary.scalar("reg_loss", reg_loss)
   merged_gradients = utils.combine_gradients(tower_gradients)
 
   if clip_gradient_norm > 0:
@@ -348,7 +351,7 @@ class Trainer(object):
 
   def __init__(self, cluster, task, train_dir, model, reader, model_exporter,
                log_device_placement=True, max_steps=None,
-               export_model_steps=1000):
+               export_model_steps=100000):
     """"Creates a Trainer.
 
     Args:
@@ -363,6 +366,7 @@ class Trainer(object):
     self.train_dir = train_dir
     self.config = tf.ConfigProto(
         allow_soft_placement=True,log_device_placement=log_device_placement)
+    self.config.gpu_options.allow_growth = True
     self.model = model
     self.reader = reader
     self.model_exporter = model_exporter
@@ -410,8 +414,9 @@ class Trainer(object):
         init_op=init_op,
         is_chief=self.is_master,
         global_step=global_step,
-        save_model_secs=15 * 60 if not FLAGS.debug else 0,
-        save_summaries_secs=120 if not FLAGS.debug else 0,
+        save_model_secs=30 * 60 if not FLAGS.debug else 0,
+        # summary_op=None,
+        save_summaries_secs=240,
         saver=saver)
 
     logging.info("%s: Starting managed session.", task_as_string(self.task))
@@ -567,7 +572,7 @@ class Trainer(object):
                  batch_size=FLAGS.batch_size,
                  num_epochs=FLAGS.num_epochs)
 
-    return tf.train.Saver(max_to_keep=0, keep_checkpoint_every_n_hours=0.25)
+    return tf.train.Saver(max_to_keep=0, keep_checkpoint_every_n_hours=0.5)
 
 
 def get_reader():

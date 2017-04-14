@@ -42,6 +42,14 @@ if __name__ == '__main__':
       "File glob defining the evaluation dataset in tensorflow.SequenceExample "
       "format. The SequenceExamples are expected to have an 'rgb' byte array "
       "sequence feature as well as a 'labels' int64 context feature.")
+  # related to eigen pooling
+  flags.DEFINE_bool("use_eigen_pooling", False, "Perform eigen pooling.")
+  flags.DEFINE_integer("eigen_k_vecs", 10,
+                       "Number of eigen vectors to use for pooling.")
+  flags.DEFINE_integer("eigen_pool_time_steps", 100,
+                       "Time steps to consider for eigen pooling.")
+  flags.DEFINE_string("eigen_vec_file_name", "",
+                      "Path to tfrecord file containing eigen vectors.")
 
   # Model flags.
   flags.DEFINE_bool(
@@ -57,12 +65,13 @@ if __name__ == '__main__':
                       "to use for training.")
   flags.DEFINE_string("feature_sizes", "1024", "Length of the feature vectors.")
 
-
   # Other flags.
   flags.DEFINE_integer("num_readers", 1,
                        "How many threads to use for reading input files.")
   flags.DEFINE_integer("top_k", 20,
                        "How many predictions to output per video.")
+  flags.DEFINE_string("checkpoint", None,
+                      "Use the given checkpoint or the latest checkpoint by default.")
 
 def format_lines(video_ids, predictions, top_k):
   batch_size = len(video_ids)
@@ -111,9 +120,13 @@ def get_input_data_tensors(reader, data_pattern, batch_size, num_readers=1):
     return video_id_batch, video_batch, num_frames_batch
 
 def inference(reader, train_dir, data_pattern, out_file_location, batch_size, top_k):
-  with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess, gfile.Open(out_file_location, "w+") as out_file:
+  config = tf.ConfigProto(allow_soft_placement=True)
+  config.gpu_options.allow_growth = True
+  with tf.Session(config=config) as sess, gfile.Open(out_file_location, "w+") as out_file:
     video_id_batch, video_batch, num_frames_batch = get_input_data_tensors(reader, data_pattern, batch_size)
     latest_checkpoint = tf.train.latest_checkpoint(train_dir)
+    if FLAGS.checkpoint is not None:
+      latest_checkpoint = '{}-{}'.format(latest_checkpoint.split('-')[0], FLAGS.checkpoint)
     if latest_checkpoint is None:
       raise Exception("unable to find a checkpoint at location: %s" % train_dir)
     else:
@@ -175,8 +188,16 @@ def main(unused_argv):
       FLAGS.feature_names, FLAGS.feature_sizes)
 
   if FLAGS.frame_features:
-    reader = readers.YT8MFrameFeatureReader(feature_names=feature_names,
-                                            feature_sizes=feature_sizes)
+    if FLAGS.use_eigen_pooling:
+      assert FLAGS.eigen_vec_file_name is not None, "Enter path to eigenvectors."
+      reader = readers.YT8MFrameEigPoolFeatureReader(
+        FLAGS.eigen_vec_file_name,
+        FLAGS.eigen_pool_time_steps,
+        top_k_eigen_feats=FLAGS.eigen_k_vecs,
+        feature_names=feature_names, feature_sizes=feature_sizes)
+    else:
+      reader = readers.YT8MFrameFeatureReader(
+          feature_names=feature_names, feature_sizes=feature_sizes)
   else:
     reader = readers.YT8MAggregatedFeatureReader(feature_names=feature_names,
                                                  feature_sizes=feature_sizes)
@@ -194,4 +215,9 @@ def main(unused_argv):
 
 
 if __name__ == "__main__":
-  app.run()
+  try:
+    app.run()
+  except KeyboardInterrupt:
+    logging.info("Interrupted.")
+  except tf.errors.ResourceExhaustedError:
+    logging.error("Ran out of memory. Exiting.")
