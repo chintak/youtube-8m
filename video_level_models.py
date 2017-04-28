@@ -24,7 +24,7 @@ import tensorflow.contrib.slim as slim
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer(
-    "moe_num_mixtures", 2,
+    "moe_num_mixtures", 4,
     "The number of mixtures (excluding the dummy 'expert') used for MoeModel.")
 
 class LogisticModel(models.BaseModel):
@@ -74,7 +74,7 @@ class MoeModel(models.BaseModel):
       batch_size x num_classes.
     """
     num_mixtures = num_mixtures or FLAGS.moe_num_mixtures
-
+    #print 'Number of experts used: {}'.format(num_mixtures)
     gate_activations = slim.fully_connected(
         model_input,
         vocab_size * (num_mixtures + 1),
@@ -82,12 +82,41 @@ class MoeModel(models.BaseModel):
         biases_initializer=None,
         weights_regularizer=slim.l2_regularizer(l2_penalty),
         scope="gates")
+    '''
     expert_activations = slim.fully_connected(
         model_input,
         vocab_size * num_mixtures,
         activation_fn=None,
         weights_regularizer=slim.l2_regularizer(l2_penalty),
         scope="experts")
+
+    '''
+
+    #Adding additional layer(s), in experts
+    num_hidden_units_1 = 2048
+    num_hidden_units_2 = 512
+
+    interim_layer_1 = slim.fully_connected(
+        model_input,
+        num_hidden_units_1,
+        #activation_fn=None,
+        weights_regularizer=slim.l2_regularizer(l2_penalty),
+        scope="interim1")
+
+    interim_layer_2 = slim.fully_connected(
+        interim_layer_1,
+        num_hidden_units_2,
+        #activation_fn=tf.None,
+        weights_regularizer=slim.l2_regularizer(l2_penalty),
+        scope="interim2")
+
+    expert_activations = slim.fully_connected(
+        interim_layer_2,
+        vocab_size * num_mixtures,
+        activation_fn=None,
+        weights_regularizer=slim.l2_regularizer(l2_penalty),
+        scope="experts")
+
 
     gating_distribution = tf.nn.softmax(tf.reshape(
         gate_activations,

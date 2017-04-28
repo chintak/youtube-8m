@@ -17,8 +17,9 @@
 import tensorflow as tf
 import numpy as np
 import utils
-
 from tensorflow import logging
+
+
 def resize_axis(tensor, axis, new_size, fill_value=0):
   """Truncates or pads a tensor to new_size on on a given axis.
 
@@ -270,7 +271,7 @@ class YT8MFrameFeatureReader(BaseReader):
     return batch_video_ids, batch_video_matrix, batch_labels, batch_frames
 
 
-class YT8MFrameEigPoolFeatureReader(BaseReader):
+class YT8MFrameTransformFeatureReader(BaseReader):
   """Reads TFRecords of SequenceExamples.
 
   The TFRecords must contain SequenceExamples with the sparse in64 'labels'
@@ -280,8 +281,9 @@ class YT8MFrameEigPoolFeatureReader(BaseReader):
   """
 
   def __init__(self,
-               eigen_vec_file_name,
-               sample_time_steps,
+               transform='avg',  # 'eigen', 'avg'
+               sample_time_steps=0,
+               eigen_vec_file_name='',
                num_classes=4716,
                top_k_eigen_feats=10,
                feature_sizes=[1024],
@@ -300,13 +302,18 @@ class YT8MFrameEigPoolFeatureReader(BaseReader):
     "length of feature_names (={}) != length of feature_sizes (={})".format( \
     len(feature_names), len(feature_sizes))
 
+    assert sample_time_steps != 0, "Time steps 0."
+    if transform == 'eigen':
+      assert eigen_vec_file_name is not '', "Enter path to eigenvectors."
+    self.transform_type = transform
     self.num_classes = num_classes
     self.feature_sizes = feature_sizes
     self.feature_names = feature_names
     self.max_frames = max_frames
-    self.top_k_eigen_feats = top_k_eigen_feats
     self.sample_time_steps = sample_time_steps
-    self.eigenvecs_np = self.load_eigen_matrix(eigen_vec_file_name).T
+    if transform == 'eigen':
+      self.top_k_eigen_feats = top_k_eigen_feats
+      self.eigenvecs_np = self.load_eigen_matrix(eigen_vec_file_name).T
 
   def get_video_matrix(self,
                        features,
@@ -348,7 +355,9 @@ class YT8MFrameEigPoolFeatureReader(BaseReader):
         features={
             'time_steps': tf.FixedLenFeature([], tf.int64),
             'eigen_vectors': tf.FixedLenFeature([time_steps**2], tf.float32),
-            'eigen_values': tf.FixedLenFeature([time_steps], tf.float32)
+#            'eigen_values': tf.FixedLenFeature([time_steps], tf.float32),
+#            'global_mean': tf.FixedLenFeature([], tf.float32),
+#            'raw_covar': tf.FixedLenFeature([time_steps**2], tf.float32)
         })
     eigenvecs_ten = tf.reshape(transform_data['eigen_vectors'], (time_steps, time_steps))
     with tf.Session() as sess:
@@ -420,35 +429,126 @@ class YT8MFrameEigPoolFeatureReader(BaseReader):
         num_frames = num_frames_in_this_feature
       else:
         tf.assert_equal(num_frames, num_frames_in_this_feature)
+
       if "rgb" in self.feature_names[feature_index]:
-        feature_matrix = self.apply_eigen_pooling(
+        # compute avg/eigen pooling on sampled rgb features
+        samp_feature_matrix = self.uniform_sampling(
           feature_matrix, num_frames_in_this_feature)
-      feature_matrix = tf.reshape(feature_matrix, [-1])
+        if self.transform_type == 'eigen':
+          feature_matrix = self.apply_eigen_pooling(samp_feature_matrix)
+        elif self.transform_type == 'avg':
+          feature_matrix = self.compute_mean(samp_feature_matrix)
+        elif self.transform_type == 'all':
+          feature_matrix = samp_feature_matrix
+      else:
+        # compute video level avg features for audio
+        feature_matrix = self.compute_mean(feature_matrix)
+      if self.transform_type != 'all':
+        feature_matrix = tf.reshape(feature_matrix, [-1])
       feature_matrices[feature_index] = feature_matrix
 
     # cap the number of frames at self.max_frames
     num_frames = tf.minimum(num_frames, self.max_frames)
 
-    # concatenate different features
-    video_matrix = tf.concat(feature_matrices, 1)
+    if self.transform_type == 'all':
+      batch_video_matrix = feature_matrices
+    else:
+      # concatenate different features
+      video_matrix = tf.concat(feature_matrices, 0)
+      batch_video_matrix = tf.expand_dims(video_matrix, 0)
 
     # convert to batch format.
     # TODO: Do proper batch reads to remove the IO bottleneck.
     batch_video_ids = tf.expand_dims(contexts["video_id"], 0)
-    batch_video_matrix = tf.expand_dims(video_matrix, 0)
     batch_labels = tf.expand_dims(labels, 0)
     batch_frames = tf.expand_dims(num_frames, 0)
 
     return batch_video_ids, batch_video_matrix, batch_labels, batch_frames
 
-  def apply_eigen_pooling(self, video_mat, num_frames):
-    time_steps = self.sample_time_steps
-    # indexing
-    sample_idxs = tf.range(time_steps, dtype=tf.float32)
-    sample_freq = tf.cast(num_frames / time_steps, tf.float32)
-    indices = tf.cast(tf.floor(sample_idxs * sample_freq), dtype=tf.int32)
-    # slice
-    tr_video_mat = tf.gather(video_mat, indices)
-    eigen_vecs = tf.constant(self.eigenvecs_np, dtype=tf.float32)
-    tr_video_mat = tf.matmul(eigen_vecs, tr_video_mat)
+  def uniform_sampling(self, video_mat, num_frames):
+    with tf.variable_scope("uniform_sampling"):
+      time_steps = self.sample_time_steps
+      # indexing
+      sample_idxs = tf.range(time_steps, dtype=tf.float32)
+      sample_freq = tf.cast(num_frames / time_steps, tf.float32)
+      indices = tf.cast(tf.floor(sample_idxs * sample_freq), dtype=tf.int32)
+      # slice
+      samp_video_mat = tf.gather(video_mat, indices)
+    return samp_video_mat
+
+  def apply_eigen_pooling(self, samp_video_mat):
+    with tf.variable_scope("eigen_pooling"):
+      eigen_vecs = tf.constant(self.eigenvecs_np, dtype=tf.float32)
+      tr_video_mat = tf.matmul(eigen_vecs, samp_video_mat)
     return tr_video_mat
+
+  def compute_mean(self, samp_video_mat):
+    with tf.variable_scope("mean"):
+      mu_video_mat = tf.reduce_mean(samp_video_mat, axis=0)
+    return mu_video_mat
+
+
+class YT8MAggregatedTransformedFeatureReader(BaseReader):
+  """Reads TFRecords of pre-aggregated Examples.
+
+  The TFRecords must contain Examples with a sparse int64 'labels' feature and
+  a fixed length float32 feature, obtained from the features in 'feature_name'.
+  The float features are assumed to be an average of dequantized values.
+  """
+
+  def __init__(self,
+               num_classes=4716,
+               feature_sizes=[1024],
+               feature_names=["mean_inc3"]):
+    """Construct a YT8MAggregatedFeatureReader.
+
+    Args:
+      num_classes: a positive integer for the number of classes.
+      feature_sizes: positive integer(s) for the feature dimensions as a list.
+      feature_names: the feature name(s) in the tensorflow record as a list.
+    """
+
+    assert len(feature_names) == len(feature_sizes), \
+    "length of feature_names (={}) != length of feature_sizes (={})".format( \
+    len(feature_names), len(feature_sizes))
+
+    self.num_classes = num_classes
+    self.feature_sizes = feature_sizes
+    self.feature_names = feature_names
+
+  def prepare_reader(self, filename_queue, batch_size=1024):
+    """Creates a single reader thread for pre-aggregated YouTube 8M Examples.
+
+    Args:
+      filename_queue: A tensorflow queue of filename locations.
+
+    Returns:
+      A tuple of video indexes, features, labels, and padding data.
+    """
+    reader = tf.TFRecordReader()
+    _, serialized_examples = reader.read_up_to(filename_queue, batch_size)
+
+    tf.add_to_collection("serialized_examples", serialized_examples)
+    return self.prepare_serialized_examples(serialized_examples)
+
+  def prepare_serialized_examples(self, serialized_examples):
+    # set the mapping from the fields to data types in the proto
+    num_features = len(self.feature_names)
+    assert num_features > 0, "self.feature_names is empty!"
+    assert len(self.feature_names) == len(self.feature_sizes), \
+    "length of feature_names (={}) != length of feature_sizes (={})".format( \
+    len(self.feature_names), len(self.feature_sizes))
+
+    feature_map = {"video_id": tf.FixedLenFeature([], tf.string),
+                   "labels": tf.VarLenFeature(tf.int64)}
+    for feature_index in range(num_features):
+      feature_map[self.feature_names[feature_index]] = tf.FixedLenFeature(
+          [self.feature_sizes[feature_index]], tf.float32)
+
+    features = tf.parse_example(serialized_examples, features=feature_map)
+    labels = tf.sparse_to_indicator(features["labels"], self.num_classes)
+    labels.set_shape([None, self.num_classes])
+    concatenated_features = tf.concat([
+        features[feature_name] for feature_name in self.feature_names], 1)
+
+    return features["video_id"], concatenated_features, labels, tf.ones([tf.shape(serialized_examples)[0]])

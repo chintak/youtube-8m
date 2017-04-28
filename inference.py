@@ -43,11 +43,11 @@ if __name__ == '__main__':
       "format. The SequenceExamples are expected to have an 'rgb' byte array "
       "sequence feature as well as a 'labels' int64 context feature.")
   # related to eigen pooling
-  flags.DEFINE_bool("use_eigen_pooling", False, "Perform eigen pooling.")
+  flags.DEFINE_string("transform", "", "'avg' or 'eigen'")
   flags.DEFINE_integer("eigen_k_vecs", 10,
                        "Number of eigen vectors to use for pooling.")
-  flags.DEFINE_integer("eigen_pool_time_steps", 100,
-                       "Time steps to consider for eigen pooling.")
+  flags.DEFINE_integer("transform_time_steps", 100,
+                       "Time steps to consider for avg/eigen pooling.")
   flags.DEFINE_string("eigen_vec_file_name", "",
                       "Path to tfrecord file containing eigen vectors.")
 
@@ -188,19 +188,19 @@ def main(unused_argv):
       FLAGS.feature_names, FLAGS.feature_sizes)
 
   if FLAGS.frame_features:
-    if FLAGS.use_eigen_pooling:
-      assert FLAGS.eigen_vec_file_name is not None, "Enter path to eigenvectors."
-      reader = readers.YT8MFrameEigPoolFeatureReader(
-        FLAGS.eigen_vec_file_name,
-        FLAGS.eigen_pool_time_steps,
+    if FLAGS.transform is not '':
+      reader = readers.YT8MFrameTransformFeatureReader(
+        transform=FLAGS.transform,
+        sample_time_steps=FLAGS.transform_time_steps,
+        eigen_vec_file_name=FLAGS.eigen_vec_file_name,
         top_k_eigen_feats=FLAGS.eigen_k_vecs,
         feature_names=feature_names, feature_sizes=feature_sizes)
     else:
       reader = readers.YT8MFrameFeatureReader(
           feature_names=feature_names, feature_sizes=feature_sizes)
   else:
-    reader = readers.YT8MAggregatedFeatureReader(feature_names=feature_names,
-                                                 feature_sizes=feature_sizes)
+    reader = readers.YT8MAggregatedFeatureReader(
+        feature_names=feature_names, feature_sizes=feature_sizes)
 
   if FLAGS.output_file is "":
     raise ValueError("'output_file' was not specified. "

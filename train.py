@@ -16,7 +16,7 @@
 import json
 import os
 import time
-
+import sys
 import eval_util
 import export_model
 import losses
@@ -47,12 +47,12 @@ if __name__ == "__main__":
   flags.DEFINE_string("feature_names", "mean_rgb", "Name of the feature "
                       "to use for training.")
   flags.DEFINE_string("feature_sizes", "1024", "Length of the feature vectors.")
-  # related to eigen pooling
-  flags.DEFINE_bool("use_eigen_pooling", False, "Perform eigen pooling.")
+  # related to data transformation - eigen pooling
+  flags.DEFINE_string("transform", "", "'avg' or 'eigen'")
   flags.DEFINE_integer("eigen_k_vecs", 10,
                        "Number of eigen vectors to use for pooling.")
-  flags.DEFINE_integer("eigen_pool_time_steps", 100,
-                       "Time steps to consider for eigen pooling.")
+  flags.DEFINE_integer("transform_time_steps", 100,
+                       "Time steps to consider for avg/eigen pooling.")
   flags.DEFINE_string("eigen_vec_file_name", "",
                       "Path to tfrecord file containing eigen vectors.")
 
@@ -581,11 +581,11 @@ def get_reader():
       FLAGS.feature_names, FLAGS.feature_sizes)
 
   if FLAGS.frame_features:
-    if FLAGS.use_eigen_pooling:
-      assert FLAGS.eigen_vec_file_name is not None, "Enter path to eigenvectors."
-      reader = readers.YT8MFrameEigPoolFeatureReader(
-        FLAGS.eigen_vec_file_name,
-        FLAGS.eigen_pool_time_steps,
+    if FLAGS.transform is not '':
+      reader = readers.YT8MFrameTransformFeatureReader(
+        transform=FLAGS.transform,
+        sample_time_steps=FLAGS.transform_time_steps,
+        eigen_vec_file_name=FLAGS.eigen_vec_file_name,
         top_k_eigen_feats=FLAGS.eigen_k_vecs,
         feature_names=feature_names, feature_sizes=feature_sizes)
     else:
@@ -677,6 +677,7 @@ def main(unused_argv):
         model=model,
         reader=reader)
 
+    FLAGS.train_dir = FLAGS.train_dir if not FLAGS.debug else 'test_run_model'
     Trainer(cluster, task, FLAGS.train_dir, model, reader, model_exporter,
             FLAGS.log_device_placement, FLAGS.max_steps,
             FLAGS.export_model_steps).run(start_new_model=FLAGS.start_new_model)
@@ -694,5 +695,3 @@ if __name__ == "__main__":
     logging.info("Interrupted.")
   except tf.errors.ResourceExhaustedError:
     logging.error("Ran out of memory. Exiting.")
-  except Exception as e:
-    logging.error("Exception occured.")
