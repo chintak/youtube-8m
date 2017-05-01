@@ -8,8 +8,14 @@ from tensorflow import logging
 import readers
 from  writer import MultiFileWriter, serialize_video_level_example
 import utils
+from contextlib import contextmanager
+import multiprocessing as mp
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from itertools import starmap
+from multiprocessing import Pool
+from functools import reduce
+from operator import add
 
 
 FLAGS = flags.FLAGS
@@ -46,10 +52,6 @@ def _float_feature(value_list):
     return tf.train.Feature(float_list=tf.train.FloatList(value=value_list))
 
 def _bytes_feature(value_list):
-    if isinstance(value_list, np.ndarray):
-        value_list = [value_list.flatten().tostring()]
-    elif isinstance(value_list, float):
-        value_list = [value_list]
     return tf.train.Feature(bytes_list=tf.train.BytesList(value=value_list))
 
 def serialize_video_level_example(eig_fts, rank_fts, mu_fts, max_fts, audio, vid, label):
@@ -146,15 +148,21 @@ def compute_mean(samp_video_mat):
       mu_video_mat = tf.reduce_mean(samp_video_mat, axis=0)
     return mu_video_mat
 
-def transform_eig_max_avg_rank(input_file, output_file):
+def transform_eig_max_avg_rank(file, out=None):
+    if out is None:
+        input_file, output_file = file[0], file[1]
+    else:
+        input_file, output_file = file, out
+# def transform_eig_max_avg_rank(input_file, output_file):
     feat_dim = 1024
     time_steps = FLAGS.transform_time_steps
     # Eigen pooling
     eigenvecs = load_eigen_matrix(
         FLAGS.eigen_vec_file_name, FLAGS.transform_time_steps, FLAGS.eigen_k_vecs)
 
-    sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
-                                            log_device_placement=False))
+    config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
+    config.gpu_options.allow_growth = True
+    sess = tf.Session(config=config)
 
     training_data = parse_frame_level_features(sess, input_file)
     video_ids, feature_matrix, labels, num_frames = training_data
@@ -180,7 +188,7 @@ def transform_eig_max_avg_rank(input_file, output_file):
 
     # Setup TFRecord writer
     writer = tf.python_io.TFRecordWriter(output_file)
-    logging.info('Begin writing %s file.' % (output_file))
+    # logging.info('Begin writing %s file.' % (output_file))
 
     # Initialize the variables (like the epoch counter).
     init_op = tf.group(tf.global_variables_initializer(),
@@ -209,11 +217,11 @@ def transform_eig_max_avg_rank(input_file, output_file):
                 ser_examples = serialize_video_level_example(
                     eig_ft, rank_ft, mu_ft, max_ft, aud, vid_id, vid_lab)
                 writer.write(ser_examples)
-                end = time.time() - start
-                if printed + 10000 < nvids:
-                    printed = nvids
-                    logging.info("Processed %d from %s in %.3f sec @ %.3f ms/ex" % (
-                        nvids, input_file, end, (end*1000)/nvids))
+                # end = time.time() - start
+                # if printed + 10000 < nvids:
+                #     printed = nvids
+                #     logging.info("Processed %d from %s in %.3f sec @ %.3f ms/ex" % (
+                #         nvids, input_file, end, (end*1000)/nvids))
 
         except KeyboardInterrupt:
             logging.info('Interrupted.')
@@ -221,21 +229,42 @@ def transform_eig_max_avg_rank(input_file, output_file):
             logging.info('Done iterating -- epoch limit reached')
 
         writer.close()
-        logging.info("Closing file %s." % (output_file))
+        # logging.info("Closing file %s." % (output_file))
         # When done, ask the threads to stop.
         coord.request_stop()
         # Wait for threads to finish.
         coord.join(threads)
         sess.close()
         logging.info(
-            "Completed %d examples in %.3f sec." % (nvids, time.time() - start))
+            "Wrote %d examples to %s in %.3f sec." % (
+                nvids, output_file, time.time() - start))
 
 def read_file_names(fname):
     with open(fname, 'r') as fp:
         names = fp.read().strip().split('\n')
     return names
 
-def main():
+@contextmanager
+def terminating(thing):
+    try:
+        yield thing
+    finally:
+        thing.terminate()
+
+def main_mp():
+    logging.set_verbosity(tf.logging.INFO)
+    input_files = read_file_names(FLAGS.input_fname_files)
+    output_files = read_file_names(FLAGS.output_fname_files)
+    with terminating(mp.Pool(processes=FLAGS.max_w)) as pool:
+        try:
+            res = pool.imap(transform_eig_max_avg_rank,
+                            [(inp, out) for inp, out in zip(input_files, output_files)],
+                            chunksize=512)
+            print "Pool:", [i for i in res]
+        except KeyboardInterrupt:
+            pass
+
+def main_futures():
     logging.set_verbosity(tf.logging.INFO)
     input_files = read_file_names(FLAGS.input_fname_files)
     output_files = read_file_names(FLAGS.output_fname_files)
@@ -251,5 +280,17 @@ def main():
             ft.shutdown()
         concurrent.futures.wait(futures)
 
+def main_futures_map():
+    logging.set_verbosity(tf.logging.INFO)
+    input_files = read_file_names(FLAGS.input_fname_files)
+    output_files = read_file_names(FLAGS.output_fname_files)
+    files = [[inp, out] for inp, out in zip(input_files, output_files)]
+    with ProcessPoolExecutor(max_workers=FLAGS.max_w) as executor:
+        try:
+            for res in executor.map(transform_eig_max_avg_rank, files, chunksize=1024):
+                print res
+        except KeyboardInterrupt:
+            executor.cancel()
+
 if __name__ == '__main__':
-    main()
+    main_futures_map()

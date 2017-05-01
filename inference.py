@@ -123,10 +123,12 @@ def inference(reader, train_dir, data_pattern, out_file_location, batch_size, to
   config = tf.ConfigProto(allow_soft_placement=True)
   config.gpu_options.allow_growth = True
   with tf.Session(config=config) as sess, gfile.Open(out_file_location, "w+") as out_file:
-    video_id_batch, video_batch, num_frames_batch = get_input_data_tensors(reader, data_pattern, batch_size)
+    video_id_batch, video_batch, num_frames_batch = get_input_data_tensors(
+      reader, data_pattern, batch_size)
     latest_checkpoint = tf.train.latest_checkpoint(train_dir)
     if FLAGS.checkpoint is not None:
-      latest_checkpoint = '{}-{}'.format(latest_checkpoint.split('-')[0], FLAGS.checkpoint)
+      latest_checkpoint = '{}-{}'.format(
+        latest_checkpoint.split('-')[0], FLAGS.checkpoint)
     if latest_checkpoint is None:
       raise Exception("unable to find a checkpoint at location: %s" % train_dir)
     else:
