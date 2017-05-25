@@ -123,10 +123,6 @@ class YT8MAggregatedFeatureReader(BaseReader):
           [self.feature_sizes[feature_index]], tf.float32)
 
     features = tf.parse_example(serialized_examples, features=feature_map)
-    for feature_index in range(num_features):
-      if 'eig1' == self.feature_names[feature_index]:
-        print "dividing eig1 by 5"
-        features[self.feature_names[feature_index]] = features[self.feature_names[feature_index]] / tf.constant(5.0, tf.float32)
     labels = tf.sparse_to_indicator(features["labels"], self.num_classes)
     labels.set_shape([None, self.num_classes])
     concatenated_features = tf.concat([

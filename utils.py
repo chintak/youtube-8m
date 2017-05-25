@@ -135,7 +135,7 @@ def AddEpochSummary(summary_writer,
   info = ("epoch/eval number {0} | Avg_Hit@1: {1:.3f} | Avg_PERR: {2:.3f} "
           "| MAP: {3:.3f} | GAP: {4:.3f} | Avg_Loss: {5:3f}").format(
           epoch_id, avg_hit_at_one, avg_perr, mean_ap, gap, avg_loss)
-  return info
+  return info, aps
 
 def GetListOfFeatureNamesAndSizes(feature_names, feature_sizes):
   """Extract the list of feature names and the dimensionality of each feature

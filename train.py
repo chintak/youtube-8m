@@ -414,7 +414,7 @@ class Trainer(object):
         init_op=init_op,
         is_chief=self.is_master,
         global_step=global_step,
-        save_model_secs=30 * 60 if not FLAGS.debug else 0,
+        save_model_secs=10 * 60 if not FLAGS.debug else 0,
         # summary_op=None,
         save_summaries_secs=240,
         saver=saver)

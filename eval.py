@@ -198,6 +198,7 @@ def evaluation_loop(video_id_batch, prediction_batch, label_batch, loss,
 
   global_step_val = -1
   with tf.Session() as sess:
+#    latest_checkpoint = FLAGS.train_dir
     latest_checkpoint = tf.train.latest_checkpoint(FLAGS.train_dir)
     if latest_checkpoint:
       logging.info("Loading checkpoint for eval: " + latest_checkpoint)
@@ -253,28 +254,35 @@ def evaluation_loop(video_id_batch, prediction_batch, label_batch, loss,
                      iterinfo)
 
     except tf.errors.OutOfRangeError as e:
-      logging.info(
-          "Done with batched inference. Now calculating global performance "
-          "metrics.")
-      # calculate the metrics for the entire epoch
-      epoch_info_dict = evl_metrics.get()
-      epoch_info_dict["epoch_id"] = global_step_val
-
-      summary_writer.add_summary(summary_val, global_step_val)
-      epochinfo = utils.AddEpochSummary(
-          summary_writer,
-          global_step_val,
-          epoch_info_dict,
-          summary_scope="Eval")
-      logging.info(epochinfo)
-      evl_metrics.clear()
+      pass
     except Exception as e:  # pylint: disable=broad-except
       logging.info("Unexpected exception: " + str(e))
       coord.request_stop(e)
 
+    logging.info(
+      "Done with batched inference. Now calculating global performance "
+      "metrics.")
+    # calculate the metrics for the entire epoch
+    epoch_info_dict = evl_metrics.get()
+    epoch_info_dict["epoch_id"] = global_step_val
+
+    summary_writer.add_summary(summary_val, global_step_val)
+    epochinfo, aps = utils.AddEpochSummary(
+      summary_writer,
+      global_step_val,
+      epoch_info_dict,
+      summary_scope="Eval")
+    logging.info(epochinfo)
+    evl_metrics.clear()
+
     coord.request_stop()
     coord.join(threads, stop_grace_period_secs=10)
 
+    import cPickle as pickle
+    name = 'preds/class_ap_%s_%d.pkl' % (
+      FLAGS.feature_names.replace(',','_'), examples_processed)
+    with open(name, 'w') as fp:
+      pickle.dump(aps, fp, protocol=2)
     return global_step_val
 
 
